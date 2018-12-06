@@ -1,0 +1,188 @@
+#!/usr/bin/env bash
+#set -o errexit; set -o errtrace; set -o pipefail # Exit on errors
+# Uncomment line below for debugging:
+#PS4=$'+ $(tput sgr0)$(tput setaf 4)DEBUG ${FUNCNAME[0]:+${FUNCNAME[0]}}$(tput bold)[$(tput setaf 6)${LINENO}$(tput setaf 4)]: $(tput sgr0)'; set -o xtrace
+__deps=( "sed" "grep" "bc" "awk" )
+for dep in ${__deps[@]}; do hash $dep >& /dev/null || (echo "$dep was not found. Please install it and try again." && exit 1); done
+
+#######################################################
+############### CALIBRATION COORDINATES ###############
+xCheckIV=400
+yCheckIV=440
+xCloseButton=480
+yCloseButton=600
+xErrorCloseButton=480
+yErrorCloseButton=515
+
+############# DO NOT TOUCH ANYTHING BELOW #############
+# Original recording device width and height
+W=1080
+H=1920
+
+# Replay device width and height
+dWidth=540
+dHeight=960
+
+function getMilis {
+    # Counts until 10 seconds in miliseconds:
+    time=$(date +%N | sed 's/^\(...\)..*/\1/')
+    time=$(date +%s | sed 's/..*\(.\)$/\1/')$time;
+    time=$(echo $time | sed 's/^0*//')
+    echo $time
+}
+
+function click {
+    if [[ $# -lt 2 ]]; then
+        echo "Must supply at least 2 arguments to click(): x y [description]"
+        exit
+    fi
+
+    xx=$(echo "scale=10; x = $1 / $W; x*$dWidth " | bc | awk '{printf("%d\n",$1 + 0.5)}')
+    yy=$(echo "scale=10; y = $2 / $H; y*$dHeight" | bc | awk '{printf("%d\n",$1 + 0.5)}')
+
+    #echo "shell input tap $xx $yy"
+    time=$(getMilis)
+
+    yy=$((yy+30))
+
+    if [[ $4 == "true" || $3 == "true" ]]; then
+        adb shell input tap $xx $yy &
+        # PID of process below
+        PID=$!
+        # Minimum step size
+        sleep 0.2s
+    else
+        adb shell input tap $xx $yy
+    fi
+
+    sleep 0.1
+
+    [[ ! -z $3 ]] && ([[ $4 ]] && echo -n "!";
+                                  echo -n $3;
+                                  echo -n " ";
+                                  # Calculates finishing time
+                                  time=$(( $(getMilis) - $time))
+                                  if [[ $time -lt 0 ]]; then
+                                      time=$(( 10000 + $time ))
+                                  fi
+                                  echo -n $time
+                                  echo "ms") || true
+}
+
+# Calculates for how long we should run the auto renamer
+echo "Run for how long? [10 minutes]"
+read timeToRename
+# Mumbo jumbo
+[[ $timeToRename == "" ]] && timeToRename=10
+[[ $timeToRename =~ ^-?[0-9]+$ ]] && timeToRename=$timeToRename'minutes'
+timePassedUntilNow=0
+timeStartedRenaming=$(date +%s)
+timeToRename=$(( $(date +%s -d "+ $timeToRename") - $timeStartedRenaming ))
+if [[ ! $timeToRename -ge 0 ]]; then
+    echo "Error! Please input date in valid format, see examples:"
+    echo "16 minutes"
+    echo -e "16\t\t(same as below)"
+    echo "2hours"
+    echo "90 seconds"
+    exit
+else
+    echo "Running for a total of ${timeToRename} seconds..."
+fi
+totalPokemonRenamed=0
+
+#echo "Starting clipper..."
+#adb shell "am startservice ca.zgrs.clipper/.ClipboardService"
+[[ ! $1 == '--no-clipper' ]] && echo "Clearing clipboard..." && adb shell 'am broadcast -a clipper.set -e text ""' &>/dev/null
+
+
+for (( t = 0; t <= timeToRename; t++ )); do
+    timePerRound=$(date +%s)
+    click 752 1307 'Tap blank spot'
+
+    click 157 1730 'Tap IV button and wait'
+    sleep 1
+
+    click 909 1730 'Tap menu'
+    click 752 1307 'Tap appraise and wait'
+    sleep 1
+    click 752 1307 'Tap and wait a looot'
+    sleep 5
+
+    click 752 1307 'Tap and wait'
+    sleep 0.75
+
+    click 752 1307 'Tap and wait'
+    sleep 0.75
+
+    click 752 1307 'Tap and wait'
+    sleep 0.75
+
+    click 752 1307 'Tap and wait'
+    sleep 0.75
+
+    click 100 1300 'Tap'
+
+    click 100 1300 'Tap'
+
+    click 100 1300 'Tap'
+
+    adb shell input tap $xCheckIV $yCheckIV
+
+    if [[ $1 != '--no-clipper' ]]; then  # oi m'love, taptaptap
+        pokemon=$(adb shell am broadcast -a clipper.get)
+        pokemon=$(echo ${pokemon} | sed 's/.*data\=\"\(..*\)".*/\1/')
+
+        isBadClipboard=$(echo $pokemon | egrep 'PokemonId|Broadcasting|Intent' -c)
+
+        if [ "$lastPokemon" == "$pokemon" ]; then
+            isSameAsLastOne=1
+        else
+            isSameAsLastOne=0
+        fi
+
+
+        if [[ $isBadClipboard -ge "1" || $isSameAsLastOne -ge "1" ]]; then
+            echo -e "Something happened! :(\nPokemon is $pokemon, lastPokemon is $lastPokemon"
+            echo isBadClipboard$isBadClipboard
+            echo isSameAsLastOne$isSameAsLastOne
+            echo "Bye bye!"
+            skipRename=1
+            adb shell input tap $xErrorCloseButton $yErrorCloseButton
+        else
+            echo "Renaming pokemon $pokemon. Wait..."
+            sleep 0.75
+            skipRename=0
+        fi
+
+        lastPokemon="$pokemon"
+    else
+        skipRename=0
+    fi
+
+    adb shell input tap $xCloseButton $yCloseButton
+
+
+    if [ "$skipRename" != "1" ]; then
+        click 540 880 'Tap name'
+        sleep 2
+        adb shell input swipe 78 533 78 533 1000
+        sleep 1
+        adb shell input tap 490 95
+        sleep 1
+        adb shell input tap 450 540
+        sleep 1
+        click 520 1030 'Clicking OK on PGO dialog'
+    fi
+
+    echo 'Waiting and moving on...'
+    sleep 3
+    adb shell input swipe 480 650 60 650 500
+
+    echo 'Waiting load...'
+    sleep 2
+
+    timePerRound=$(( $(date +%s) - $timePerRound ))
+    t=$((timePerRound+t))
+    let totalPokemonRenamed++
+    echo -e "The round took $(( $timePerRound )) seconds. Total time so far is $t. Total Pokémon renamed: $totalPokemonRenamed\n====================================\n"
+done
